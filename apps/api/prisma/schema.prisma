@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ClauseType {
+  OBLIGATION
+  RIGHT
+  RISK
+  TERMINATION
+  PENALTY
+  AMBIGUOUS
+  DEFINITION
+  OTHER
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model Document {
+  id          String   @id @default(cuid())
+  ownerId     String
+  title       String
+  sourceName  String?
+  rawText     String   @db.Text
+  language    String?  @default("en")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  clauses     Clause[]
+  parties     Party[]
+  leftComparisons  ComparisonSession[] @relation("LeftDocument")
+  rightComparisons ComparisonSession[] @relation("RightDocument")
+
+  @@index([ownerId, createdAt])
+}
+
+model Clause {
+  id                   String     @id @default(cuid())
+  documentId           String
+  rawText              String     @db.Text
+  startOffset          Int
+  endOffset            Int
+  sectionLabel         String?
+  clauseType           ClauseType
+  riskLevel            RiskLevel  @default(LOW)
+  confidenceScore      Float
+  plainLanguageSummary String     @db.Text
+  riskExplanation      String?    @db.Text
+  document             Document   @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  outgoingReferences   CrossReference[] @relation("SourceClause")
+  incomingReferences   CrossReference[] @relation("TargetClause")
+  leftMatches          ComparisonMatch[] @relation("LeftClause")
+  rightMatches         ComparisonMatch[] @relation("RightClause")
+
+  @@index([documentId, clauseType])
+  @@index([documentId, riskLevel])
+}
+
+model Party {
+  id         String   @id @default(cuid())
+  documentId String
+  name       String
+  role       String?
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, name])
+}
+
+model CrossReference {
+  id             String @id @default(cuid())
+  sourceClauseId String
+  targetClauseId String
+  label          String?
+  sourceClause   Clause @relation("SourceClause", fields: [sourceClauseId], references: [id], onDelete: Cascade)
+  targetClause   Clause @relation("TargetClause", fields: [targetClauseId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceClauseId, targetClauseId])
+}
+
+model ComparisonSession {
+  id              String   @id @default(cuid())
+  leftDocumentId  String
+  rightDocumentId String
+  createdAt       DateTime @default(now())
+  leftDocument    Document @relation("LeftDocument", fields: [leftDocumentId], references: [id], onDelete: Cascade)
+  rightDocument   Document @relation("RightDocument", fields: [rightDocumentId], references: [id], onDelete: Cascade)
+  matches         ComparisonMatch[]
+}
+
+model ComparisonMatch {
+  id                  String            @id @default(cuid())
+  comparisonSessionId String
+  leftClauseId        String?
+  rightClauseId       String?
+  similarityScore     Float?
+  changeSummary       String?           @db.Text
+  favorability        String?
+  session             ComparisonSession @relation(fields: [comparisonSessionId], references: [id], onDelete: Cascade)
+  leftClause          Clause?           @relation("LeftClause", fields: [leftClauseId], references: [id], onDelete: SetNull)
+  rightClause         Clause?           @relation("RightClause", fields: [rightClauseId], references: [id], onDelete: SetNull)
+
+  @@index([comparisonSessionId])
+}
