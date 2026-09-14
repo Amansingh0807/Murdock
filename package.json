@@ -1,0 +1,16 @@
+{
+  "name": "murdock",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w @murdock/api\" \"npm run dev -w @murdock/web\"",
+    "build": "npm run build -w @murdock/api && npm run build -w @murdock/web",
+    "db:generate": "npm run db:generate -w @murdock/api",
+    "db:migrate": "npm run db:migrate -w @murdock/api",
+    "db:seed": "npm run db:seed -w @murdock/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
