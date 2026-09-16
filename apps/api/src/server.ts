@@ -50,10 +50,14 @@ function referencedAnswer(doc:DocumentGraph,question:string){const q=question.to
 
 const questionSchema=z.object({question:z.string().trim().min(3).max(1000)});const compareSchema=z.object({leftDocumentId:z.string().min(1).max(100),rightText:z.string().trim().min(10).max(500_000)});
 app.get("/health", (_q,r)=>r.json({name:"Murdock API",status:"ok",authRequired}));
-app.post("/documents/sample", requireUser, writeLimiter, (_q,r)=>{const d=extractGraph(res.locals.userId,"Sample rental agreement",sampleText());documents.set(d.id,d);r.status(201).json(d)});
+app.post("/documents/sample", requireUser, writeLimiter, (_q,r)=>{const d=extractGraph(r.locals.userId,"Sample rental agreement",sampleText());documents.set(d.id,d);r.status(201).json(d)});
 app.post("/documents", requireUser, writeLimiter, upload.single("file"), async(q,r)=>{try{if(!q.file)return r.status(400).json({error:"Upload rejected."});const text=await fileText(q.file);if(!text.trim())return r.status(422).json({error:"Upload rejected."});const d=extractGraph(q.res?.locals.userId ?? "local_demo_user",q.file.originalname,text);documents.set(d.id,d);r.status(201).json(d)}catch{r.status(422).json({error:"Upload rejected."})}});
 app.post("/documents/:id/ask", requireUser, writeLimiter, (q,r)=>{const parsed=questionSchema.safeParse(q.body),d=ownedDocument(String(q.params.id),r.locals.userId);if(!parsed.success)return r.status(400).json({error:"Request rejected."});if(!d)return r.status(404).json({error:"Document not found."});r.json({answer:referencedAnswer(d,parsed.data.question)})});
 app.post("/compare", requireUser, writeLimiter, (q,r)=>{const parsed=compareSchema.safeParse(q.body);if(!parsed.success)return r.status(400).json({error:"Request rejected."});const left=ownedDocument(parsed.data.leftDocumentId,r.locals.userId);if(!left)return r.status(404).json({error:"Document not found."});const right=extractGraph(r.locals.userId,"Pasted comparison",parsed.data.rightText);documents.set(right.id,right);const misses=left.clauses.filter(l=>!right.clauses.some(x=>x.clauseType===l.clauseType));r.json({summary:`Compared ${left.clauses.length} source clauses with ${right.clauses.length} clauses in the pasted version. ${misses.length} original clause types have no matching clause: ${misses.map(c=>c.sectionLabel).join(", ")||"none"}. Review these cited sections with a lawyer for their practical effect. This is general information, not legal advice.`})});
 app.use((_req,res)=>res.status(404).json({error:"Route not found."}));
 app.use((error:unknown,_req:Request,res:Response,_next:NextFunction)=>{if(error instanceof multer.MulterError)return res.status(400).json({error:"Upload rejected: file must be below 12 MB."});console.error("Unhandled API error",error);res.status(500).json({error:"An unexpected error occurred."});});
-app.listen(port,()=>console.info(`Murdock API listening on ${port}`));
+if (process.env.NODE_ENV !== "test") {
+  app.listen(port, () => console.info(`Murdock API listening on ${port}`));
+}
+
+export { app };
