@@ -19,6 +19,31 @@ describe("Murdock API Tests", () => {
     expect(Array.isArray(res.body.clauses)).toBe(true);
     expect(res.body.clauses.length).toBeGreaterThan(0);
   });
+
+  it("should accept a plain-text document upload", async () => {
+    const res = await request(app)
+      .post("/documents")
+      .attach("file", Buffer.from("1. PAYMENT\nThe tenant must pay rent monthly."), {
+        filename: "agreement.txt",
+        contentType: "text/plain",
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toHaveProperty("title", "agreement.txt");
+    expect(res.body.clauses.length).toBeGreaterThan(0);
+  });
+
+  it("should explain unsupported uploads", async () => {
+    const res = await request(app)
+      .post("/documents")
+      .attach("file", Buffer.from([0, 1, 2, 3]), {
+        filename: "agreement.bin",
+        contentType: "application/octet-stream",
+      });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toHaveProperty("error", "Unsupported file type. Please upload a PDF, DOCX, or TXT file.");
+  });
   
   it("should return 404 for asking questions on non-existent document", async () => {
     const res = await request(app)
