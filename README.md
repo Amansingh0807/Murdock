@@ -58,72 +58,139 @@ Murdock is a **full-stack, AI-powered legal document intelligence platform** tha
 | **Grounded, not hallucinated** | Every explanation, flag, and answer cites a specific clause. If the system cannot point to a source, it says so. |
 | **Informational, not advisory** | The UI and API explicitly label every output as general information. "Should I sign?" style questions are reframed as context, never as advice. |
 | **Extract once, reuse everywhere** | A single clause-graph extraction powers all six modes — no redundant processing. |
-| **Privacy by design** | Documents are scoped to authenticated owners. Supabase Row-Level Security + Clerk JWT verification enforce tenant isolation at both API and database layers. |
+| **Privacy by design** | The API scopes in-memory documents to authenticated owners. Clerk JWT verification is live; Supabase Row-Level Security is prepared for the persistent database path. |
 
 ---
 
 ## System Architecture
 
+### Deployed component architecture
+
+```mermaid
+flowchart LR
+  Browser[User browser]
+  Vercel[Vercel<br/>Next.js web app]
+  Clerk[Clerk<br/>Sign in, sign up, JWT]
+  Render[Render<br/>Express API]
+  Memory[(API process memory<br/>current document store)]
+  Supabase[(Supabase PostgreSQL<br/>Prisma schema + RLS)]
+
+  Browser --> Vercel
+  Vercel <--> Clerk
+  Vercel -->|HTTPS + Authorization Bearer JWT| Render
+  Render -->|Verify JWT when AUTH_REQUIRED=true| Clerk
+  Render --> Memory
+  Supabase -.->|Defined persistence layer\nnot used by current server routes| Render
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                            USER / BROWSER                              │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │  Next.js 15 Frontend  (localhost:3000)                          │   │
-│  │  ┌────────┐ ┌────────┐ ┌─────────┐ ┌────────┐ ┌────────────┐   │   │
-│  │  │ Upload │ │ Clause │ │  Risk   │ │  Ask   │ │  Compare   │   │   │
-│  │  │  Page  │ │ Viewer │ │ Scanner │ │  Q&A   │ │   Diff     │   │   │
-│  │  └───┬────┘ └───┬────┘ └────┬────┘ └───┬────┘ └─────┬──────┘   │   │
-│  │      │          │           │           │            │           │   │
-│  │      └──────────┴─────┬─────┴───────────┴────────────┘           │   │
-│  │                       │  Clerk Auth (JWT)                        │   │
-│  └───────────────────────┼──────────────────────────────────────────┘   │
-│                          │  HTTPS / Bearer Token                        │
-├──────────────────────────┼──────────────────────────────────────────────┤
-│                          ▼                                              │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │  Express API  (localhost:4000)                                   │   │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐    │   │
-│  │  │  Helmet  │ │  CORS    │ │  Rate    │ │  Clerk Middleware│    │   │
-│  │  │  (CSP)   │ │  (allow  │ │  Limiter │ │  (JWT verify)    │    │   │
-│  │  │          │ │   list)  │ │ 100/15m  │ │                  │    │   │
-│  │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └───────┬──────────┘    │   │
-│  │       └─────────────┴────────────┴───────────────┘               │   │
-│  │                          │                                       │   │
-│  │  ┌───────────────────────┼───────────────────────────────────┐   │   │
-│  │  │       ROUTE HANDLERS                                      │   │   │
-│  │  │  POST /documents           ← upload + extract graph       │   │   │
-│  │  │  POST /documents/sample    ← load demo agreement          │   │   │
-│  │  │  POST /documents/:id/ask   ← grounded Q&A                 │   │   │
-│  │  │  POST /compare             ← clause-by-clause diff        │   │   │
-│  │  │  GET  /health              ← health check                 │   │   │
-│  │  └───────────────────────┼───────────────────────────────────┘   │   │
-│  │                          │                                       │   │
-│  │  ┌───────────────────────▼───────────────────────────────────┐   │   │
-│  │  │  CLAUSE GRAPH ENGINE                                      │   │   │
-│  │  │  ┌─────────────┐  ┌──────────────┐  ┌─────────────────┐  │   │   │
-│  │  │  │ PDF / DOCX  │  │  Section     │  │  Clause-Level   │  │   │   │
-│  │  │  │ Text Extract│→ │  Splitter    │→ │  Classifier     │  │   │   │
-│  │  │  │ (pdf-parse, │  │  (regex +    │  │  (type + risk + │  │   │   │
-│  │  │  │  mammoth)   │  │   heuristic) │  │   confidence)   │  │   │   │
-│  │  │  └─────────────┘  └──────────────┘  └─────────────────┘  │   │   │
-│  │  └──────────────────────────────────────────────────────────┘   │   │
-│  └──────────────────────────────────────────────────────────────────┘   │
-│                          │                                              │
-├──────────────────────────┼──────────────────────────────────────────────┤
-│                          ▼                                              │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │  PostgreSQL + Supabase                                           │   │
-│  │  ┌───────────┐ ┌────────┐ ┌───────┐ ┌────────────┐ ┌─────────┐  │   │
-│  │  │ Document  │→│ Clause │→│ Party │ │ CrossRef   │ │Compare  │  │   │
-│  │  │ (owner,   │ │ (type, │ │ (name,│ │ (source ↔  │ │Session  │  │   │
-│  │  │  raw text)│ │  risk, │ │  role) │ │  target)   │ │+ Match  │  │   │
-│  │  │           │ │  score)│ │       │ │            │ │         │  │   │
-│  │  └───────────┘ └────────┘ └───────┘ └────────────┘ └─────────┘  │   │
-│  │                                                                  │   │
-│  │  Row-Level Security (RLS) — ownerId = Clerk JWT `sub`            │   │
-│  └──────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────┘
+
+The browser talks to two deployed services: the Next.js web app on Vercel and the Express API on Render. Clerk provides the user session in the web app; the web app obtains a Clerk token and sends it to the API as a Bearer token. The API verifies that token, applies CORS, Helmet, and rate limits, then handles the document operation.
+
+> **Current persistence status:** the active API stores extracted documents in an in-memory `Map`. The Prisma schema, migrations, and Supabase RLS policy define the intended PostgreSQL persistence model, but the current routes do not yet read from or write to Prisma. Memory is lost whenever the Render instance restarts or scales, and documents cannot yet be fetched across sessions. This is the next backend work item.
+
+### Request and document-processing flow
+
+```mermaid
+sequenceDiagram
+  participant U as Browser
+  participant W as Next.js on Vercel
+  participant C as Clerk
+  participant A as Express API on Render
+  participant G as Clause graph engine
+  participant S as In-memory document store
+
+  U->>W: Open app / choose document
+  W->>C: Read signed-in session
+  C-->>W: Clerk JWT token
+  U->>W: Upload PDF, DOCX, or TXT
+  W->>A: POST /documents + Bearer token
+  A->>A: CORS, Helmet, rate limit, JWT auth
+  A->>G: Extract text and build clause graph
+  G-->>A: Clauses, risk labels, summaries, citations
+  A->>S: Store graph by ownerId
+  A-->>W: Return document graph
+  W-->>U: Render clause viewer and risk flags
+  U->>W: Ask question or compare text
+  W->>A: POST /documents/:id/ask or POST /compare
+  A->>S: Check document ownership
+  S-->>A: Document graph
+  A-->>W: Grounded answer or comparison summary
+  W-->>U: Render result
 ```
+
+### API security and ownership flow
+
+```mermaid
+flowchart TD
+  Request[Browser API request]
+  Cors{Origin in<br/>ALLOWED_ORIGIN?}
+  Security[Helmet + global rate limit]
+  Auth{AUTH_REQUIRED?}
+  ClerkAuth[Clerk Express middleware<br/>verify Bearer JWT]
+  Owner[requireUser<br/>set res.locals.userId]
+  Route[Document route handler]
+  Check[ownedDocument\nmatch ownerId]
+  Response[JSON response]
+  Reject[401 / 403 / 404 response]
+
+  Request --> Cors
+  Cors -->|No| Reject
+  Cors -->|Yes| Security --> Auth
+  Auth -->|No, local demo| Owner
+  Auth -->|Yes| ClerkAuth
+  ClerkAuth -->|Valid| Owner
+  ClerkAuth -->|Invalid| Reject
+  Owner --> Route --> Check
+  Check -->|Owner matches| Response
+  Check -->|Missing or different owner| Reject
+```
+
+### Persistence model prepared in Prisma
+
+```mermaid
+erDiagram
+  Document ||--o{ Clause : contains
+  Document ||--o{ Party : names
+  Clause ||--o{ CrossReference : source
+  Clause ||--o{ CrossReference : target
+  Document ||--o{ ComparisonSession : left_document
+  Document ||--o{ ComparisonSession : right_document
+  ComparisonSession ||--o{ ComparisonMatch : contains
+  Clause ||--o{ ComparisonMatch : left_clause
+  Clause ||--o{ ComparisonMatch : right_clause
+
+  Document {
+    string id PK
+    string ownerId
+    string title
+    string rawText
+    datetime createdAt
+  }
+  Clause {
+    string id PK
+    string documentId FK
+    string clauseType
+    string riskLevel
+    float confidenceScore
+    string plainLanguageSummary
+  }
+  Party {
+    string id PK
+    string documentId FK
+    string name
+  }
+  ComparisonSession {
+    string id PK
+    string leftDocumentId FK
+    string rightDocumentId FK
+  }
+  ComparisonMatch {
+    string id PK
+    string comparisonSessionId FK
+    float similarityScore
+  }
+```
+
+Supabase RLS is designed to use the Clerk JWT `sub` claim as `Document.ownerId`. Once the API is connected to Prisma, this gives a second ownership boundary at the database layer in addition to the API's `ownedDocument` check.
 
 ---
 
@@ -175,7 +242,8 @@ Based on flagged risks, Murdock automatically generates a list of **questions to
 | **Styling** | Vanilla CSS (hand-crafted "sketchbook" theme) | Distinctive, accessible visual identity |
 | **Authentication** | Clerk (Next.js + Express SDKs) | JWT-based auth with graceful demo-mode fallback |
 | **Backend** | Express 4, TypeScript, tsx | RESTful API with middleware-based security stack |
-| **Database** | PostgreSQL via Prisma ORM | Type-safe queries, migrations, and seeding |
+| **Persistence** | In-memory `Map` (current API) | Fast demo/runtime storage; resets when the API restarts |
+| **Database schema** | PostgreSQL via Prisma + Supabase RLS | Prepared persistence model; not wired into current API routes yet |
 | **Cloud DB** | Supabase (PostgreSQL + RLS) | Row-level security for multi-tenant isolation |
 | **File Parsing** | pdf-parse, mammoth | Extract text from PDF and DOCX binaries |
 | **Validation** | Zod | Runtime schema validation on all API inputs |
@@ -189,7 +257,7 @@ Based on flagged risks, Murdock automatically generates a list of **questions to
 ```
 Murdock/
 ├── assets/
-│   └── murdock-logo.svg              # Project logo
+│   └── logo.png                      # Project logo
 ├── apps/
 │   ├── api/                           # Express backend
 │   │   ├── prisma/
@@ -220,6 +288,7 @@ Murdock/
 │       ├── package.json
 │       └── tsconfig.json
 ├── .env.example                       # Environment template
+├── render.yaml                         # Render API deployment blueprint
 ├── .gitignore
 ├── package.json                       # Root workspace config
 └── README.md                          # This file
@@ -275,7 +344,9 @@ Edit `apps/api/.env`:
 | `SUPABASE_URL` | Supabase project URL | No |
 | `SUPABASE_SECRET_KEY` | Supabase service-role key for admin access | No |
 
-### 4. Set up the database
+### 4. Optional database preparation
+
+The current API does not yet persist documents through Prisma. These commands prepare the database schema for the next persistence step; they are not required for the current in-memory demo flow.
 
 ```bash
 # Generate the Prisma client
@@ -316,6 +387,8 @@ This launches both servers concurrently:
 
 All write endpoints require authentication (when `AUTH_REQUIRED=true`) and are subject to rate limiting (20 requests per 15-minute window).
 
+There is currently no `GET /documents` or `GET /documents/:id` endpoint. A document is returned by the upload/sample request and kept in the API process memory, so a Render restart or a new API instance loses it. Persistent document fetch is a planned follow-up.
+
 ---
 
 ## Code Quality
@@ -326,7 +399,7 @@ Murdock is built with maintainability and type safety as first-class priorities.
 |---|---|
 | **TypeScript everywhere** | Both frontend (`Next.js + React 19`) and backend (`Express + Prisma`) are fully typed. No `any` escape hatches. |
 | **Strict schema validation** | All API inputs are validated with **Zod** schemas before processing. Invalid payloads return structured `400` errors. |
-| **Type-safe database** | Prisma generates typed client code from `schema.prisma`. Enum types (`ClauseType`, `RiskLevel`) are shared between DB and application logic. |
+| **Prepared data model** | Prisma schema and migrations define typed `Document`, `Clause`, party, reference, and comparison models; the live API currently uses an in-memory graph instead. |
 | **Single source of truth** | The `extractGraph()` function is the only clause extraction path — all features reuse the same graph, eliminating inconsistency. |
 | **Clean separation** | Frontend (Next.js) ↔ Backend (Express) communicate via a well-defined REST API. No tight coupling. |
 | **Monorepo with workspaces** | `npm workspaces` keeps dependencies isolated per app while sharing a single lockfile. |
@@ -355,7 +428,7 @@ Body Limits     → JSON: 32 KB, File upload: 12 MB, Max 1 file, 0 extra fields
 |---|---|
 | **Identity** | Clerk JWT tokens verified on every authenticated request |
 | **API-level ownership** | `requireUser()` middleware extracts `userId` from JWT; `ownedDocument()` verifies the caller owns the requested resource |
-| **Database-level isolation** | Supabase Row-Level Security (RLS) policies enforce `ownerId = JWT.sub` on all six tables |
+| **Database-level isolation (prepared)** | Supabase RLS policies are ready to enforce `ownerId = JWT.sub` once Prisma-backed routes are enabled |
 | **Graceful degradation** | When `AUTH_REQUIRED=false`, the system runs in demo mode with a synthetic `local_demo_user` — no auth bypass, just a fixed identity |
 
 ### Input Sanitization
@@ -379,10 +452,10 @@ Found a vulnerability? Email **amansingh0807@outlook.com** with a clear reproduc
 
 | Optimization | Detail |
 |---|---|
-| **Extract once, query many** | The clause graph is computed on upload and cached in memory (and persisted via Prisma). All subsequent features (Q&A, compare, risk scan) operate on the pre-built graph — O(n) extraction, O(1) lookup. |
+| **Extract once, query many** | The clause graph is computed on upload and cached in API memory. All subsequent features (Q&A, compare, risk scan) operate on the pre-built graph. |
 | **Streaming file parsing** | `pdf-parse` and `mammoth` process file buffers in memory without writing temp files to disk — no I/O bottleneck. |
 | **Bounded extraction** | Section extraction is capped at 250 clauses; raw text is truncated at 500K characters — preventing memory exhaustion on adversarial inputs. |
-| **Lightweight classification** | Clause classification uses deterministic regex heuristics (O(1) per clause) rather than expensive LLM calls for the core pipeline. AI is reserved for the Gemini-powered enhanced mode. |
+| **Lightweight classification** | Clause classification uses deterministic regex heuristics rather than an LLM; the current API has no active Gemini request path. |
 | **Selective re-render** | React `useMemo` on risk-flagged clauses prevents unnecessary re-computation on every state update. |
 | **Rate limiting** | Protects against DoS — 100 general + 20 write requests per 15-minute window. |
 | **Monorepo single install** | `npm workspaces` deduplicates shared dependencies across `apps/api` and `apps/web`. |
