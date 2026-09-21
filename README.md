@@ -568,6 +568,25 @@ The "Questions for a lawyer" panel auto-generates targeted questions for each fl
 
 ## Environment Variables
 
+### Production deployment
+
+Deploy `apps/web` as a Vercel project and `apps/api` as a Render web service. These are separate deployments and therefore use separate environment-variable dashboards:
+
+| Dashboard | Variable | Value |
+|---|---|---|
+| Vercel (`apps/web`) | `NEXT_PUBLIC_API_URL` | Your Render API URL, for example `https://murdock-api.onrender.com` |
+| Vercel (`apps/web`) | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable key |
+| Vercel (`apps/web`) | `CLERK_SECRET_KEY` | Clerk secret key, without the `NEXT_PUBLIC_` prefix |
+| Vercel (`apps/web`) | `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | `/sign-in` |
+| Vercel (`apps/web`) | `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | `/sign-up` |
+| Vercel (`apps/web`) | `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | `/` |
+| Vercel (`apps/web`) | `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL` | `/` |
+| Render (`apps/api`) | `ALLOWED_ORIGIN` | Your Vercel origin, for example `https://murdock.vercel.app` |
+| Render (`apps/api`) | `AUTH_REQUIRED` | `true` |
+| Render (`apps/api`) | `CLERK_SECRET_KEY` | Clerk secret key |
+
+Do not put `CLERK_SECRET_KEY`, `DATABASE_URL`, or `SUPABASE_SECRET_KEY` in Vercel `NEXT_PUBLIC_*` variables. After the first Vercel deploy, copy its exact origin into Render's `ALLOWED_ORIGIN` and redeploy the API. Multiple origins can be comma-separated; do not use `*` when authentication is enabled.
+
 ### API (`apps/api/.env`)
 
 ```env

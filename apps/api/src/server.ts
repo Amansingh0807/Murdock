@@ -17,7 +17,10 @@ type DocumentGraph = { id:string; ownerId:string; title:string; rawText:string; 
 const documents = new Map<string, DocumentGraph>();
 const port = Number(process.env.PORT ?? 4000);
 const authRequired = process.env.AUTH_REQUIRED === "true" || process.env.NODE_ENV === "production";
-const allowedOrigins = new Set((process.env.ALLOWED_ORIGIN ?? "http://localhost:3000").split(",").map((origin) => origin.trim()).filter(Boolean));
+const allowedOrigins = new Set((process.env.ALLOWED_ORIGIN ?? "http://localhost:3000")
+  .split(",")
+  .map((origin) => origin.trim().replace(/\/$/, ""))
+  .filter(Boolean));
 if (authRequired && !process.env.CLERK_SECRET_KEY) throw new Error("CLERK_SECRET_KEY is required when authentication is enabled.");
 const upload = multer({
   storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024, files: 1, fields: 0 },
@@ -25,7 +28,7 @@ const upload = multer({
 const app = express();
 app.disable("x-powered-by");
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" }, frameguard: { action: "deny" }, referrerPolicy: { policy: "strict-origin-when-cross-origin" }, hsts: { maxAge: 31536000, includeSubDomains: true } }));
-app.use(cors({ origin: (origin, callback) => callback(null, !origin || allowedOrigins.has(origin)), methods: ["GET", "POST"], allowedHeaders: ["Content-Type", "Authorization"], maxAge: 86400 }));
+app.use(cors({ origin: (origin, callback) => callback(null, !origin || allowedOrigins.has(origin.replace(/\/$/, ""))), methods: ["GET", "POST"], allowedHeaders: ["Content-Type", "Authorization"], maxAge: 86400 }));
 app.use(express.json({ limit: "32kb" }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: 100, standardHeaders: "draft-7", legacyHeaders: false }));
 if (authRequired) app.use(clerkMiddleware());
