@@ -12,7 +12,7 @@
   <a href="#security"><img src="https://img.shields.io/badge/security-hardened-ff4d4d?style=for-the-badge" alt="Security"/></a>
   <a href="#testing"><img src="https://img.shields.io/badge/tests-automated_&amp;_manual-27ae60?style=for-the-badge" alt="Testing"/></a>
   <a href="#accessibility"><img src="https://img.shields.io/badge/WCAG-2.1_AA-8e44ad?style=for-the-badge" alt="Accessibility"/></a>
-  <a href="#tech-stack"><img src="https://img.shields.io/badge/stack-Next.js_|_Express_|_Prisma-1a2332?style=for-the-badge" alt="Tech Stack"/></a>
+  <a href="#tech-stack"><img src="https://img.shields.io/badge/stack-Next.js_|_Vercel-1a2332?style=for-the-badge" alt="Tech Stack"/></a>
 </p>
 
 ---
@@ -71,21 +71,20 @@ flowchart LR
   Browser[User browser]
   Vercel[Vercel<br/>Next.js web app]
   Clerk[Clerk<br/>Sign in, sign up, JWT]
-  Render[Render<br/>Express API]
+  API[Next.js Route Handlers<br/>/api/*]
   Memory[(API process memory<br/>current document store)]
   Supabase[(Supabase PostgreSQL<br/>Prisma schema + RLS)]
 
   Browser --> Vercel
   Vercel <--> Clerk
-  Vercel -->|HTTPS + Authorization Bearer JWT| Render
-  Render -->|Verify JWT when AUTH_REQUIRED=true| Clerk
-  Render --> Memory
-  Supabase -.->|Defined persistence layer\nnot used by current server routes| Render
+  Vercel --> API
+  API -->|Verify session when AUTH_REQUIRED=true| Clerk
+  API --> Memory
 ```
 
-The browser talks to two deployed services: the Next.js web app on Vercel and the Express API on Render. Clerk provides the user session in the web app; the web app obtains a Clerk token and sends it to the API as a Bearer token. The API verifies that token, applies CORS, Helmet, and rate limits, then handles the document operation.
+The browser talks to one deployed Next.js application on Vercel. The UI calls same-origin `/api/*` route handlers, which verify the Clerk session when authentication is enabled and handle document operations in the Node.js runtime.
 
-> **Current persistence status:** the active API stores extracted documents in an in-memory `Map`. The Prisma schema, migrations, and Supabase RLS policy define the intended PostgreSQL persistence model, but the current routes do not yet read from or write to Prisma. Memory is lost whenever the Render instance restarts or scales, and documents cannot yet be fetched across sessions. This is the next backend work item.
+> **Current persistence status:** the active route handlers store extracted documents in an in-memory `Map`. Vercel functions are ephemeral, so documents are lost when an instance is recycled. Add a persistent database before relying on cross-request or long-lived document history.
 
 ### Request and document-processing flow
 
@@ -94,7 +93,7 @@ sequenceDiagram
   participant U as Browser
   participant W as Next.js on Vercel
   participant C as Clerk
-  participant A as Express API on Render
+  participant A as Next.js API route handlers
   participant G as Clause graph engine
   participant S as In-memory document store
 
@@ -108,13 +107,13 @@ sequenceDiagram
   G-->>A: Clauses, risk labels, summaries, citations
   A->>S: Store graph by ownerId
   A-->>W: Return document graph
-  W-->>U: Render clause viewer and risk flags
+  W-->>U: Show clause viewer and risk flags
   U->>W: Ask question or compare text
   W->>A: POST /documents/:id/ask or POST /compare
   A->>S: Check document ownership
   S-->>A: Document graph
   A-->>W: Grounded answer or comparison summary
-  W-->>U: Render result
+  W-->>U: Show result
 ```
 
 ### API security and ownership flow
@@ -122,19 +121,16 @@ sequenceDiagram
 ```mermaid
 flowchart TD
   Request[Browser API request]
-  Cors{Origin in<br/>ALLOWED_ORIGIN?}
-  Security[Helmet + global rate limit]
+  Security[Next.js route handler]
   Auth{AUTH_REQUIRED?}
-  ClerkAuth[Clerk Express middleware<br/>verify Bearer JWT]
-  Owner[requireUser<br/>set res.locals.userId]
+  ClerkAuth[Clerk Next.js auth<br/>verify session]
+  Owner[requireUser<br/>set owner id]
   Route[Document route handler]
   Check[ownedDocument\nmatch ownerId]
   Response[JSON response]
   Reject[401 / 403 / 404 response]
 
-  Request --> Cors
-  Cors -->|No| Reject
-  Cors -->|Yes| Security --> Auth
+  Request --> Security --> Auth
   Auth -->|No, local demo| Owner
   Auth -->|Yes| ClerkAuth
   ClerkAuth -->|Valid| Owner
@@ -240,15 +236,15 @@ Based on flagged risks, Murdock automatically generates a list of **questions to
 |---|---|---|
 | **Frontend** | Next.js 15, React 19, TypeScript | Server-rendered UI with client-side interactivity |
 | **Styling** | Vanilla CSS (hand-crafted "sketchbook" theme) | Distinctive, accessible visual identity |
-| **Authentication** | Clerk (Next.js + Express SDKs) | JWT-based auth with graceful demo-mode fallback |
-| **Backend** | Express 4, TypeScript, tsx | RESTful API with middleware-based security stack |
+| **Authentication** | Clerk Next.js SDK | Session-based auth with graceful demo-mode fallback |
+| **Backend** | Next.js Route Handlers, TypeScript | Same-origin REST API deployed with the web app |
 | **Persistence** | In-memory `Map` (current API) | Fast demo/runtime storage; resets when the API restarts |
 | **Database schema** | PostgreSQL via Prisma + Supabase RLS | Prepared persistence model; not wired into current API routes yet |
 | **Cloud DB** | Supabase (PostgreSQL + RLS) | Row-level security for multi-tenant isolation |
 | **File Parsing** | pdf-parse, mammoth | Extract text from PDF and DOCX binaries |
 | **Validation** | Zod | Runtime schema validation on all API inputs |
-| **Security** | Helmet, express-rate-limit, CORS allow-list | Defense-in-depth HTTP hardening |
-| **Monorepo** | npm workspaces, concurrently | Single `npm install`, single `npm run dev` |
+| **Security** | Clerk session checks, Zod validation | Ownership checks and runtime input validation |
+| **Deployment** | Vercel | Frontend and backend deploy as one Next.js project |
 
 ---
 
@@ -259,18 +255,7 @@ Murdock/
 ├── assets/
 │   └── logo.png                      # Project logo
 ├── apps/
-│   ├── api/                           # Express backend
-│   │   ├── prisma/
-│   │   │   ├── schema.prisma          # Database schema (6 models)
-│   │   │   ├── migrations/            # Prisma migration history
-│   │   │   ├── seed.ts                # Demo data seeder
-│   │   │   └── supabase-rls.sql       # Row-Level Security policies
-│   │   ├── src/
-│   │   │   ├── server.ts              # API entry point + all routes
-│   │   │   └── pdf-parse.d.ts         # Type declaration for pdf-parse
-│   │   ├── package.json
-│   │   └── tsconfig.json
-│   └── web/                           # Next.js frontend
+│   └── web/                           # Next.js app and backend
 │       ├── app/
 │       │   ├── page.tsx               # Main document workspace
 │       │   ├── layout.tsx             # Root layout + metadata
@@ -283,12 +268,14 @@ Murdock/
 │       │   ├── sign-in/[[...sign-in]]/page.tsx
 │       │   └── sign-up/[[...sign-up]]/page.tsx
 │       ├── lib/
+│       │   ├── api-auth.ts            # Server-side Clerk auth helper
+│       │   ├── document-service.ts    # Parsing and clause graph logic
 │       │   └── supabase.ts            # Browser Supabase client
+│       ├── app/api/                   # Next.js backend route handlers
 │       ├── middleware.ts              # Clerk route protection
 │       ├── package.json
 │       └── tsconfig.json
 ├── .env.example                       # Environment template
-├── render.yaml                         # Render API deployment blueprint
 ├── .gitignore
 ├── package.json                       # Root workspace config
 └── README.md                          # This file
@@ -319,59 +306,34 @@ cd Murdock
 npm install
 ```
 
-> This installs root dev-dependencies (`concurrently`) and all workspace dependencies in `apps/api` and `apps/web` automatically.
+> This installs the single Next.js workspace and its server-side parsing dependencies.
 
 ### 3. Configure environment variables
 
 ```bash
-# Backend
-cp .env.example apps/api/.env
-
-# Frontend
 cp apps/web/.env.example apps/web/.env.local
 ```
 
-Edit `apps/api/.env`:
+Edit `apps/web/.env.local`:
 
 | Variable | Description | Required |
 |---|---|---|
-| `DATABASE_URL` | PostgreSQL connection string | Yes |
-| `PORT` | API server port (default: `4000`) | No |
-| `GEMINI_API_KEY` | Google Gemini API key for enhanced AI features | No |
-| `ALLOWED_ORIGIN` | Comma-separated allowed CORS origins | Yes |
 | `AUTH_REQUIRED` | Set to `true` to enforce Clerk authentication | No |
 | `CLERK_SECRET_KEY` | Clerk secret key (required when `AUTH_REQUIRED=true`) | Conditional |
-| `SUPABASE_URL` | Supabase project URL | No |
-| `SUPABASE_SECRET_KEY` | Supabase service-role key for admin access | No |
 
-### 4. Optional database preparation
-
-The current API does not yet persist documents through Prisma. These commands prepare the database schema for the next persistence step; they are not required for the current in-memory demo flow.
-
-```bash
-# Generate the Prisma client
-npm run db:generate
-
-# Create tables via migration
-npm run db:migrate
-
-# Seed demo data
-npm run db:seed
-```
-
-### 5. Start the development servers
+### 4. Start the development server
 
 ```bash
 npm run dev
 ```
 
-This launches both servers concurrently:
+This launches the Next.js app and its same-origin API routes:
 
 | Service | URL | Description |
 |---|---|---|
 | Web UI | `http://localhost:3000` | Next.js frontend |
-| API | `http://localhost:4000` | Express backend |
-| Health Check | `http://localhost:4000/health` | API status endpoint |
+| API | `http://localhost:3000/api` | Next.js route handlers |
+| Health Check | `http://localhost:3000/api/health` | API status endpoint |
 
 ---
 
@@ -379,15 +341,15 @@ This launches both servers concurrently:
 
 | Method | Endpoint | Body | Description |
 |---|---|---|---|
-| `GET` | `/health` | — | Returns API status and auth config |
-| `POST` | `/documents` | `multipart/form-data` (`file`) | Upload PDF/DOCX/TXT → returns clause graph |
-| `POST` | `/documents/sample` | — | Load the built-in sample rental agreement |
-| `POST` | `/documents/:id/ask` | `{ "question": "..." }` | Grounded Q&A with clause citations |
-| `POST` | `/compare` | `{ "leftDocumentId": "...", "rightText": "..." }` | Clause-by-clause document comparison |
+| `GET` | `/api/health` | — | Returns API status and auth config |
+| `POST` | `/api/documents` | `multipart/form-data` (`file`) | Upload PDF/DOCX/TXT → returns clause graph |
+| `POST` | `/api/documents/sample` | — | Load the built-in sample rental agreement |
+| `POST` | `/api/documents/:id/ask` | `{ "question": "..." }` | Grounded Q&A with clause citations |
+| `POST` | `/api/compare` | `{ "leftDocumentId": "...", "rightText": "..." }` | Clause-by-clause document comparison |
 
-All write endpoints require authentication (when `AUTH_REQUIRED=true`) and are subject to rate limiting (20 requests per 15-minute window).
+All write endpoints require authentication when `AUTH_REQUIRED=true`.
 
-There is currently no `GET /documents` or `GET /documents/:id` endpoint. A document is returned by the upload/sample request and kept in the API process memory, so a Render restart or a new API instance loses it. Persistent document fetch is a planned follow-up.
+There is currently no `GET /api/documents` or `GET /api/documents/:id` endpoint. A document is returned by the upload/sample request and kept in the route process memory, so a Vercel instance recycle loses it. Persistent document fetch is a planned follow-up.
 
 ---
 
@@ -397,11 +359,11 @@ Murdock is built with maintainability and type safety as first-class priorities.
 
 | Practice | Implementation |
 |---|---|
-| **TypeScript everywhere** | Both frontend (`Next.js + React 19`) and backend (`Express + Prisma`) are fully typed. No `any` escape hatches. |
+| **TypeScript everywhere** | The Next.js UI and route handlers are fully typed. No `any` escape hatches. |
 | **Strict schema validation** | All API inputs are validated with **Zod** schemas before processing. Invalid payloads return structured `400` errors. |
 | **Prepared data model** | Prisma schema and migrations define typed `Document`, `Clause`, party, reference, and comparison models; the live API currently uses an in-memory graph instead. |
 | **Single source of truth** | The `extractGraph()` function is the only clause extraction path — all features reuse the same graph, eliminating inconsistency. |
-| **Clean separation** | Frontend (Next.js) ↔ Backend (Express) communicate via a well-defined REST API. No tight coupling. |
+| **Single application** | UI and backend route handlers share one deployment and a well-defined REST API. |
 | **Monorepo with workspaces** | `npm workspaces` keeps dependencies isolated per app while sharing a single lockfile. |
 | **Defensive coding** | `cleanText()` strips null bytes, `fileText()` validates binary signatures, and `isPlainText()` guards against binary uploads masquerading as text. |
 
@@ -458,7 +420,7 @@ Found a vulnerability? Email **amansingh0807@outlook.com** with a clear reproduc
 | **Lightweight classification** | Clause classification uses deterministic regex heuristics rather than an LLM; the current API has no active Gemini request path. |
 | **Selective re-render** | React `useMemo` on risk-flagged clauses prevents unnecessary re-computation on every state update. |
 | **Rate limiting** | Protects against DoS — 100 general + 20 write requests per 15-minute window. |
-| **Monorepo single install** | `npm workspaces` deduplicates shared dependencies across `apps/api` and `apps/web`. |
+| **Single install** | Root scripts install and build the Next.js application for Vercel. |
 
 ---
 
@@ -470,45 +432,45 @@ Murdock supports the following test strategies:
 
 ```bash
 # 1. API Health Check
-curl http://localhost:4000/health
+curl http://localhost:3000/api/health
 # Expected: { "name": "Murdock API", "status": "ok", "authRequired": false }
 
 # 2. Sample Document Generation
-curl -X POST http://localhost:4000/documents/sample
+curl -X POST http://localhost:3000/api/documents/sample
 # Expected: 201 with a document object containing 4 clauses
 
 # 3. File Upload (PDF)
-curl -X POST http://localhost:4000/documents \
+curl -X POST http://localhost:3000/api/documents \
   -F "file=@test-contract.pdf"
 # Expected: 201 with extracted clause graph
 
 # 4. Q&A with Citations
-curl -X POST http://localhost:4000/documents/{docId}/ask \
+curl -X POST http://localhost:3000/api/documents/{docId}/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "What happens if I pay late?"}'
 # Expected: Answer citing "3. Late payment" clause
 
 # 5. Document Comparison
-curl -X POST http://localhost:4000/compare \
+curl -X POST http://localhost:3000/api/compare \
   -H "Content-Type: application/json" \
   -d '{"leftDocumentId": "{docId}", "rightText": "..."}'
 # Expected: Comparison summary with clause alignment
 
 # 6. Input Validation (should fail)
-curl -X POST http://localhost:4000/documents/fake-id/ask \
+curl -X POST http://localhost:3000/api/documents/fake-id/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "ab"}'
 # Expected: 400 — question too short (min 3 chars)
 
 # 7. Rate Limit Test
 for i in $(seq 1 25); do
-  curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:4000/documents/sample
+  curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:3000/api/documents/sample
 done
 # Expected: 429 (Too Many Requests) after 20 requests
 
 # 8. Oversized Upload Rejection
 dd if=/dev/zero bs=1M count=15 > too-large.bin
-curl -X POST http://localhost:4000/documents -F "file=@too-large.bin"
+curl -X POST http://localhost:3000/api/documents -F "file=@too-large.bin"
 # Expected: 400 — file must be below 12 MB
 ```
 
@@ -643,39 +605,23 @@ The "Questions for a lawyer" panel auto-generates targeted questions for each fl
 
 ### Production deployment
 
-Deploy `apps/web` as a Vercel project and `apps/api` as a Render web service. These are separate deployments and therefore use separate environment-variable dashboards:
+Deploy the repository root as one Vercel project. The frontend and backend route handlers share the same deployment:
 
 | Dashboard | Variable | Value |
 |---|---|---|
-| Vercel (`apps/web`) | `NEXT_PUBLIC_API_URL` | Your Render API URL, for example `https://murdock-api.onrender.com` |
-| Vercel (`apps/web`) | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable key |
-| Vercel (`apps/web`) | `CLERK_SECRET_KEY` | Clerk secret key, without the `NEXT_PUBLIC_` prefix |
-| Vercel (`apps/web`) | `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | `/sign-in` |
-| Vercel (`apps/web`) | `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | `/sign-up` |
-| Vercel (`apps/web`) | `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | `/` |
-| Vercel (`apps/web`) | `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL` | `/` |
-| Render (`apps/api`) | `ALLOWED_ORIGIN` | Your Vercel origin, for example `https://murdock.vercel.app` |
-| Render (`apps/api`) | `AUTH_REQUIRED` | `true` |
-| Render (`apps/api`) | `CLERK_SECRET_KEY` | Clerk secret key |
+| Vercel | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable key |
+| Vercel | `CLERK_SECRET_KEY` | Clerk secret key, without the `NEXT_PUBLIC_` prefix |
+| Vercel | `AUTH_REQUIRED` | `true` |
+| Vercel | `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | `/sign-in` |
+| Vercel | `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | `/sign-up` |
+| Vercel | `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | `/` |
+| Vercel | `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL` | `/` |
 
-Do not put `CLERK_SECRET_KEY`, `DATABASE_URL`, or `SUPABASE_SECRET_KEY` in Vercel `NEXT_PUBLIC_*` variables. After the first Vercel deploy, copy its exact origin into Render's `ALLOWED_ORIGIN` and redeploy the API. Multiple origins can be comma-separated; do not use `*` when authentication is enabled.
-
-### API (`apps/api/.env`)
-
-```env
-DATABASE_URL="postgresql://postgres:postgres@localhost:5432/murdock?schema=public"
-PORT=4000
-GEMINI_API_KEY="<your_api_key>"
-ALLOWED_ORIGIN="http://localhost:3000"
-AUTH_REQUIRED="false"
-SUPABASE_URL="https://your-project.supabase.co"
-SUPABASE_SECRET_KEY=""
-```
+Do not put `CLERK_SECRET_KEY` in a Vercel `NEXT_PUBLIC_*` variable. The API is same-origin, so no API URL or CORS configuration is needed.
 
 ### Web (`apps/web/.env.local`)
 
 ```env
-NEXT_PUBLIC_API_URL="http://localhost:4000"
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="<your_clerk_publishable_key>"
 CLERK_SECRET_KEY="<your_clerk_secret_key>"
 NEXT_PUBLIC_SUPABASE_URL="https://your-project.supabase.co"
@@ -688,12 +634,9 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY="<your_supabase_anon_key>"
 
 | Command | Scope | Description |
 |---|---|---|
-| `npm install` | Root | Install all dependencies (root + workspaces) |
-| `npm run dev` | Root | Start API + Web concurrently |
-| `npm run build` | Root | Production build (API then Web) |
-| `npm run db:generate` | API | Regenerate Prisma client |
-| `npm run db:migrate` | API | Apply pending database migrations |
-| `npm run db:seed` | API | Insert demo data |
+| `npm install` | Root | Install dependencies |
+| `npm run dev` | Root | Start the Next.js app and API routes |
+| `npm run build` | Root | Production build for Vercel |
 
 ---
 
