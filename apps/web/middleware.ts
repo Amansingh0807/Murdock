@@ -1,8 +1,8 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
-// The public landing, legal pages, and Clerk-hosted sign-in/up stay accessible.
-// Add future authenticated screens here (for example /workspace or /account).
-const isProtectedRoute = createRouteMatcher(["/workspace(.*)", "/account(.*)"]);
+// The landing, legal pages, and Clerk sign-in/up stay public. User documents and
+// dashboard data are private and must always go through Clerk first.
+const isProtectedRoute = createRouteMatcher(["/workspace(.*)", "/account(.*)", "/dashboard(.*)", "/documents(.*)"]);
 
 export default clerkMiddleware(async (auth, request) => {
   if (isProtectedRoute(request)) await auth.protect();
