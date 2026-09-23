@@ -1,5 +1,5 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 // The landing, legal pages, and Clerk sign-in/up stay public. User documents and
 // dashboard data are private and must always go through Clerk first.
@@ -12,7 +12,7 @@ const clerkHandler = clerkMiddleware(async (auth, request) => {
 
 export default hasClerkConfig
   ? clerkHandler
-  : (request: Request) => {
+  : (request: NextRequest) => {
       if (isProtectedRoute(request)) return NextResponse.redirect(new URL("/sign-in?error=auth-config", request.url));
       return NextResponse.next();
     };
