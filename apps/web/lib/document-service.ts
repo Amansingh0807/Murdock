@@ -62,16 +62,22 @@ export async function fileText(file: File) {
   const isPdf = extension === "pdf" || buffer.subarray(0, 4).equals(Buffer.from("%PDF"));
   const isDocx = extension === "docx" || (buffer[0] === 0x50 && buffer[1] === 0x4b);
   if (isPdf) {
-    const { PDFParse } = await import("pdf-parse");
-    const parser = new PDFParse({ data: buffer });
+    const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const loadingTask = getDocument({ data: new Uint8Array(buffer) });
     try {
-      const result = await parser.getText();
-      return result.text;
+      const document = await loadingTask.promise;
+      const pages: string[] = [];
+      for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+        const page = await document.getPage(pageNumber);
+        const content = await page.getTextContent();
+        pages.push(content.items.map((item) => "str" in item ? item.str : "").join(" "));
+      }
+      return pages.join("\n\n");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown PDF parsing error";
       throw new Error(`This PDF could not be read. It may be damaged, encrypted, or use an unsupported structure. (${message})`);
     } finally {
-      await parser.destroy();
+      await loadingTask.destroy();
     }
   }
   if (isDocx) {
