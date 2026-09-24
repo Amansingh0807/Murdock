@@ -5,6 +5,9 @@
   "workspaces": ["apps/*"],
   "scripts": {
     "dev": "npm run dev -w @murdock/web",
-    "build": "npm run build -w @murdock/web"
+    "build": "npm run build -w @murdock/web",
+    "test": "npm run test -w @murdock/web",
+    "test:coverage": "npm run test:coverage -w @murdock/web",
+    "lint": "npm run lint -w @murdock/web"
   }
 }
