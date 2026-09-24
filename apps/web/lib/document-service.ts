@@ -63,7 +63,7 @@ export async function fileText(file: File) {
   const isDocx = extension === "docx" || (buffer[0] === 0x50 && buffer[1] === 0x4b);
   if (isPdf) {
     try {
-      const pdfModule = await import("pdf-parse");
+      const pdfModule = await import("pdf-parse") as any;
       if (typeof pdfModule.PDFParse === "function") {
         const parser = new pdfModule.PDFParse({ data: buffer });
         try {
@@ -73,7 +73,7 @@ export async function fileText(file: File) {
           await parser.destroy();
         }
       }
-      const parseFn = typeof pdfModule.default === "function" ? pdfModule.default : (pdfModule as unknown as (buf: Buffer) => Promise<{ text: string }>);
+      const parseFn = typeof pdfModule.default === "function" ? pdfModule.default : pdfModule;
       if (typeof parseFn === "function") {
         const result = await parseFn(buffer);
         return result.text;
