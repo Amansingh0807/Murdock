@@ -62,22 +62,26 @@ export async function fileText(file: File) {
   const isPdf = extension === "pdf" || buffer.subarray(0, 4).equals(Buffer.from("%PDF"));
   const isDocx = extension === "docx" || (buffer[0] === 0x50 && buffer[1] === 0x4b);
   if (isPdf) {
-    const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    const loadingTask = getDocument({ data: new Uint8Array(buffer) });
     try {
-      const document = await loadingTask.promise;
-      const pages: string[] = [];
-      for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
-        const page = await document.getPage(pageNumber);
-        const content = await page.getTextContent();
-        pages.push(content.items.map((item) => "str" in item ? item.str : "").join(" "));
+      const pdfModule = await import("pdf-parse");
+      if (typeof pdfModule.PDFParse === "function") {
+        const parser = new pdfModule.PDFParse({ data: buffer });
+        try {
+          const result = await parser.getText();
+          return result.text;
+        } finally {
+          await parser.destroy();
+        }
       }
-      return pages.join("\n\n");
+      const parseFn = typeof pdfModule.default === "function" ? pdfModule.default : (pdfModule as unknown as (buf: Buffer) => Promise<{ text: string }>);
+      if (typeof parseFn === "function") {
+        const result = await parseFn(buffer);
+        return result.text;
+      }
+      throw new Error("PDF parser initialization failed.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown PDF parsing error";
       throw new Error(`This PDF could not be read. It may be damaged, encrypted, or use an unsupported structure. (${message})`);
-    } finally {
-      await loadingTask.destroy();
     }
   }
   if (isDocx) {
