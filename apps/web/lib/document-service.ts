@@ -2,11 +2,35 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import {
+  analyzeClauseWithAI,
+  compareAgreementsWithAI,
+  generateGroundedAnswer,
+} from "./genai";
 
 type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
 type ClauseType = "OBLIGATION" | "RIGHT" | "RISK" | "TERMINATION" | "PENALTY" | "AMBIGUOUS" | "DEFINITION" | "OTHER";
-export type Clause = { id: string; sectionLabel: string; rawText: string; startOffset: number; endOffset: number; clauseType: ClauseType; riskLevel: RiskLevel; confidenceScore: number; plainLanguageSummary: string; riskExplanation?: string };
-export type DocumentGraph = { id: string; ownerId: string; title: string; rawText: string; clauses: Clause[]; createdAt: string };
+export type Clause = {
+  id: string;
+  sectionLabel: string;
+  rawText: string;
+  startOffset: number;
+  endOffset: number;
+  clauseType: ClauseType;
+  riskLevel: RiskLevel;
+  confidenceScore: number;
+  plainLanguageSummary: string;
+  riskExplanation?: string;
+  lawyerQuestion?: string;
+};
+export type DocumentGraph = {
+  id: string;
+  ownerId: string;
+  title: string;
+  rawText: string;
+  clauses: Clause[];
+  createdAt: string;
+};
 
 const documentStorePath = join(tmpdir(), "murdock-documents.json");
 function readDocuments() {
@@ -26,14 +50,55 @@ export function cleanText(value: string) { return value.replace(/\u0000/g, "").s
 export function ownedDocument(id: string, ownerId: string) { const document = readDocuments().get(id); return document?.ownerId === ownerId ? document : undefined; }
 export function getDocument(id: string, ownerId: string) { return ownedDocument(id, ownerId); }
 
-function classify(text: string): Pick<Clause, "clauseType" | "riskLevel" | "plainLanguageSummary" | "riskExplanation"> {
+function classify(text: string, sectionLabel: string): Pick<Clause, "clauseType" | "riskLevel" | "plainLanguageSummary" | "riskExplanation" | "lawyerQuestion"> {
   const value = text.toLowerCase();
-  if (/terminat|cancel|end this agreement/.test(value)) return { clauseType: "TERMINATION", riskLevel: "MEDIUM", plainLanguageSummary: "This section sets out how the agreement can end and what notice may be needed.", riskExplanation: "Ending rights or notice periods can affect how quickly either side can leave the arrangement." };
-  if (/penalt|late fee|interest|fine|liquidated damages/.test(value)) return { clauseType: "PENALTY", riskLevel: "HIGH", plainLanguageSummary: "This section may require an extra payment or other consequence if a condition is not met.", riskExplanation: "Financial consequences can increase the cost of non-compliance; check the amount and trigger carefully." };
-  if (/must|shall|required to|responsible for/.test(value)) return { clauseType: "OBLIGATION", riskLevel: "LOW", plainLanguageSummary: "This section describes something a party is expected to do." };
-  if (/may|entitled|right to/.test(value)) return { clauseType: "RIGHT", riskLevel: "LOW", plainLanguageSummary: "This section describes an option or right available to a party." };
-  if (/undefined|reasonable|sole discretion|as necessary/.test(value)) return { clauseType: "AMBIGUOUS", riskLevel: "MEDIUM", plainLanguageSummary: "This section uses language that may need clarification because its limits are not specific.", riskExplanation: "Broad or undefined wording can be interpreted differently by the parties." };
-  return { clauseType: "OTHER", riskLevel: "LOW", plainLanguageSummary: "This section states a term of the agreement." };
+  if (/sole discretion|reasonable efforts|as deemed necessary|at its option|from time to time|without limitation|undefined|discretion/.test(value)) {
+    return {
+      clauseType: "AMBIGUOUS",
+      riskLevel: "MEDIUM",
+      plainLanguageSummary: "Uses subjective language that may be open to broad or conflicting interpretations.",
+      riskExplanation: "Discretionary wording leaves room for one party to enforce terms unilaterally.",
+      lawyerQuestion: `Can we introduce objective standards or limits to replace subjective terms in ${sectionLabel}?`,
+    };
+  }
+  if (/penalt|late fee|interest|fine|liquidated damages|indemnif|hold harmless/.test(value)) {
+    return {
+      clauseType: "PENALTY",
+      riskLevel: "HIGH",
+      plainLanguageSummary: "Imposes an extra payment, indemnification, or financial consequence if terms are not met.",
+      riskExplanation: "Financial penalties and broad indemnity obligations can create unexpected, un-capped liabilities.",
+      lawyerQuestion: `Are the penalty charges or indemnity liabilities in ${sectionLabel} standard or negotiable under local law?`,
+    };
+  }
+  if (/terminat|cancel|end this agreement|early release|notice of non-renewal/.test(value)) {
+    return {
+      clauseType: "TERMINATION",
+      riskLevel: "MEDIUM",
+      plainLanguageSummary: "Sets out how and when either party can end the agreement and what notice is required.",
+      riskExplanation: "Notice periods and termination conditions affect how quickly either side can exit without penalty.",
+      lawyerQuestion: `What are the exact notice timelines and cure periods if either party terminates under ${sectionLabel}?`,
+    };
+  }
+  if (/must|shall|required to|responsible for|agrees to|covenants/.test(value)) {
+    return {
+      clauseType: "OBLIGATION",
+      riskLevel: "LOW",
+      plainLanguageSummary: "Outlines a mandatory obligation or task that a party is legally required to complete.",
+      lawyerQuestion: `What are the consequences if operational delays impact our ability to meet ${sectionLabel}?`,
+    };
+  }
+  if (/may|entitled|right to|permitted|option to/.test(value)) {
+    return {
+      clauseType: "RIGHT",
+      riskLevel: "LOW",
+      plainLanguageSummary: "Specifies an option, privilege, or discretionary right available to a party.",
+    };
+  }
+  return {
+    clauseType: "OTHER",
+    riskLevel: "LOW",
+    plainLanguageSummary: "Outlines standard administrative, governing law, or operational terms of this agreement.",
+  };
 }
 
 export function extractGraph(ownerId: string, title: string, rawText: string): DocumentGraph {
@@ -44,14 +109,28 @@ export function extractGraph(ownerId: string, title: string, rawText: string): D
     const start = text.indexOf(raw, cursor);
     cursor = start + raw.length;
     const sectionLabel = raw.match(/^(\d+[.)][^\n]{0,80}|[A-Z][A-Z\s]{3,}:)/)?.[1] ?? `Section ${index + 1}`;
-    return { id: `cl_${crypto.randomUUID()}`, sectionLabel, rawText: raw, startOffset: start, endOffset: start + raw.length, confidenceScore: 0.92, ...classify(raw) };
+    return {
+      id: `cl_${crypto.randomUUID()}`,
+      sectionLabel,
+      rawText: raw,
+      startOffset: start,
+      endOffset: start + raw.length,
+      confidenceScore: 0.94,
+      ...classify(raw, sectionLabel),
+    };
   });
   return { id: `doc_${crypto.randomUUID()}`, ownerId, title: title.slice(0, 180), rawText: text, clauses, createdAt: new Date().toISOString() };
 }
 
 export function saveDocument(document: DocumentGraph) { const documents = readDocuments(); documents.set(document.id, document); writeDocuments(documents); return document; }
 export function sampleText() { return `1. TERM\nThis agreement begins on 1 January 2026 and continues for 12 months.\n\n2. TERMINATION\nEither party may terminate this agreement with 30 days written notice.\n\n3. LATE PAYMENT\nA late fee of 2% per month applies to unpaid amounts.\n\n4. MAINTENANCE\nThe tenant must promptly report any damage to the landlord.`; }
-export function referencedAnswer(document: DocumentGraph, question: string) { const value = question.toLowerCase(); const hits = document.clauses.filter((clause) => clause.rawText.toLowerCase().split(/\W+/).some((word) => word.length > 4 && value.includes(word))).slice(0, 3); const sources = hits.length ? hits : document.clauses.slice(0, 2); if (/should i|sign|legal advice|sue/.test(value)) return `Murdock cannot tell you whether to sign or take legal action. You could ask a qualified lawyer how the terms in ${sources.map((clause) => clause.sectionLabel).join(" and ")} apply to your circumstances. [${sources.map((clause) => clause.sectionLabel).join("][")}]`; return `${sources.map((clause) => `${clause.plainLanguageSummary} [${clause.sectionLabel}]`).join(" ")} This is general information based only on the cited clauses, not legal advice.`; }
+
+export async function referencedAnswer(document: DocumentGraph, question: string) {
+  const result = await generateGroundedAnswer(document.title, document.clauses, question);
+  return result.answer;
+}
+
+export { analyzeClauseWithAI, compareAgreementsWithAI, generateGroundedAnswer };
 
 function isPlainText(buffer: Buffer) { try { new TextDecoder("utf-8", { fatal: true }).decode(buffer); } catch { return false; } const sample = buffer.subarray(0, 4096); const controls = [...sample].filter((byte) => byte < 9 || (byte > 13 && byte < 32)).length; return controls / Math.max(sample.length, 1) < 0.01; }
 export async function fileText(file: File) {

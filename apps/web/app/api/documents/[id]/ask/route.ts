@@ -13,7 +13,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const document = ownedDocument(id, userId);
     if (!parsed.success) return NextResponse.json({ error: "Request rejected." }, { status: 400 });
     if (!document) return NextResponse.json({ error: "Document not found." }, { status: 404 });
-    return NextResponse.json({ answer: referencedAnswer(document, parsed.data.question) });
+    const answer = await referencedAnswer(document, parsed.data.question);
+    return NextResponse.json({ answer });
   } catch (error) {
     console.error("Question request failed", error);
     return NextResponse.json({ error: "An unexpected API error occurred." }, { status: 500 });
