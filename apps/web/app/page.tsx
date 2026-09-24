@@ -1,23 +1,387 @@
 "use client";
+
 import { ChangeEvent, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { SignedIn } from "@clerk/nextjs";
 import { AuthControls } from "./auth-controls";
 import { useApiToken } from "./providers";
-type Clause={id:string;sectionLabel:string;rawText:string;plainLanguageSummary:string;clauseType:string;riskLevel:string;riskExplanation?:string};
-type Doc={id:string;title:string;clauses:Clause[]};
-const api="/api";
-export default function Home(){
- const router=useRouter();
- const getToken=useApiToken();
- const [doc,setDoc]=useState<Doc|null>(null),[busy,setBusy]=useState(false),[question,setQuestion]=useState(""),[answer,setAnswer]=useState(""),[other,setOther]=useState(""),[diff,setDiff]=useState(""),[error,setError]=useState("");
- async function request(url:string,options:RequestInit){const token=await getToken();const headers=new Headers(options.headers);if(token)headers.set("Authorization",`Bearer ${token}`);const r=await fetch(url,{...options,headers});const contentType=r.headers.get("content-type")??"";const data=contentType.includes("application/json")?await r.json():null;if(!r.ok)throw new Error(data?.error??"The server could not process this request. Please restart the app and try again.");if(!data)throw new Error("The server returned an invalid response. Please restart the app and try again.");return data}
- function openDocument(nextDoc:Doc){const history=JSON.parse(localStorage.getItem("murdock.documents")??"[]");localStorage.setItem("murdock.documents",JSON.stringify([{id:nextDoc.id,title:nextDoc.title,createdAt:new Date().toISOString()},...history.filter((item:{id:string})=>item.id!==nextDoc.id)].slice(0,25)));router.push(`/documents/${nextDoc.id}`)}
- async function sample(){try{setBusy(true);setError("");openDocument(await request(`${api}/documents/sample`,{method:"POST"}))}catch(e){setError(e instanceof Error?e.message:"Could not start sample.")}finally{setBusy(false)}}
- async function upload(e:ChangeEvent<HTMLInputElement>){const f=e.target.files?.[0];if(!f)return;try{setBusy(true);setError("");const form=new FormData();form.append("file",f);openDocument(await request(`${api}/documents`,{method:"POST",body:form}))}catch(e){setError(e instanceof Error?e.message:"Could not analyse file.")}finally{setBusy(false)}}
- async function ask(){if(!doc||!question)return;try{setError("");const data=await request(`${api}/documents/${doc.id}/ask`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question})});setAnswer(data.answer)}catch(e){setError(e instanceof Error?e.message:"Could not answer question.")}}
- async function compare(){if(!doc||!other)return;try{setError("");const data=await request(`${api}/compare`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({leftDocumentId:doc.id,rightText:other})});setDiff(data.summary)}catch(e){setError(e instanceof Error?e.message:"Could not compare documents.")}}
- const flagged=useMemo(()=>doc?.clauses.filter(c=>c.riskLevel!=="LOW")??[],[doc]);
- if(!doc)return <main className="shell"><nav className="nav"><div className="brand">Mur<i>d</i>ock</div><div className="nav-right"><SignedIn><a className="btn ghost" href="/dashboard">Dashboard</a></SignedIn><span>Legal clarity, grounded in your document</span><AuthControls/></div></nav><section className="hero"><div className="eyebrow">AI-assisted document understanding</div><h1>Understand what your contract actually says.</h1><p>Upload a legal document to get clear section-by-section explanations, cited risk flags, comparisons, and questions to bring to a lawyer.</p><div className="notice">Murdock provides general information, not legal advice. Consult a qualified professional for advice about your situation.</div></section><section className="upload"><h3>{busy?"Parsing your document…":"Start with a document"}</h3><p>PDF, DOCX, or plain text. Murdock extracts a single structured clause graph that every feature reuses.</p>{busy&&<div className="loader" role="status"><span className="spinner"/>Reading clauses and mapping risks...</div>}{error&&<p className="form-error">{error}</p>}<div className="actions"><label className="btn">Choose a file<input className="file" type="file" accept=".txt,.pdf,.docx" onChange={upload} disabled={busy}/></label><button className="btn ghost" onClick={sample} disabled={busy}>{busy?"Please wait…":"Explore sample agreement"}</button></div></section><section className="how"><div><b>1. Extract once</b><p>Sections become source-linked clauses, not disconnected AI summaries.</p></div><div><b>2. Understand clearly</b><p>Read plain-language explanations directly beside original wording.</p></div><div><b>3. Act informed</b><p>Identify questions and topics worth discussing with a lawyer.</p></div></section><footer className="footer"><span>© 2026 Murdock · Information, not legal advice</span><div><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/contact">Contact</a></div></footer></main>;
- return <main className="shell"><nav className="nav"><div className="brand">Mur<i>d</i>ock</div><div className="nav-right"><button className="btn ghost" onClick={()=>setDoc(null)}>New document</button><AuthControls/></div></nav>{error&&<p className="form-error">{error}</p>}<div className="notice">Informational, not legal advice. Every explanation and flag below links back to a clause in this document.</div><div className="workspace" style={{marginTop:18}}><section className="card"><div className="doc-head"><div><h2>{doc.title}</h2><span className="eyebrow">Structured clause view</span></div><span>{doc.clauses.length} clauses</span></div><div className="clauses">{doc.clauses.map(c=><article id={c.id} key={c.id} className={`clause ${c.riskLevel}`}><div className="meta">{c.sectionLabel} · {c.clauseType}</div><p>{c.rawText}</p><p className="summary">In plain language: {c.plainLanguageSummary}</p>{c.riskExplanation&&<p><b>Why this matters:</b> {c.riskExplanation}</p>}<span className="citation">Source: {c.sectionLabel}</span></article>)}</div></section><aside className="side"><section className="card"><h3>Risk label</h3><div className="score">{flagged.length}</div><p style={{fontSize:13,color:'#68786e'}}>clauses needing attention</p>{flagged.map(c=><div className="flag" key={c.id}><b>{c.riskLevel}</b> · <a href={`#${c.id}`}>{c.sectionLabel}</a></div>)}</section><section className="card"><h3>Ask Murdock</h3><div className="notice">Information only — not a substitute for legal advice.</div><div className="chat"><input value={question} onChange={e=>setQuestion(e.target.value)} placeholder="What does termination mean?"/><button className="btn" onClick={ask}>Ask</button></div>{answer&&<p className="answer">{answer}</p>}</section><section className="card"><h3>Compare another version</h3><textarea value={other} onChange={e=>setOther(e.target.value)} placeholder="Paste another agreement here…"/><button className="btn" style={{marginTop:8}} onClick={compare}>Compare clauses</button>{diff&&<div className="diff">{diff}</div>}</section><section className="card"><h3>Questions for a lawyer</h3>{flagged.map(c=><p style={{fontSize:13}} key={c.id}>• Could you explain the implications of {c.sectionLabel}? <span className="citation">[{c.sectionLabel}]</span></p>)}</section></aside></div></main>
+
+interface Clause {
+  id: string;
+  sectionLabel: string;
+  rawText: string;
+  plainLanguageSummary: string;
+  clauseType: string;
+  riskLevel: string;
+  riskExplanation?: string;
+  lawyerQuestion?: string;
+}
+
+interface DocumentGraph {
+  id: string;
+  title: string;
+  clauses: Clause[];
+}
+
+const API_BASE = "/api";
+
+export default function Home() {
+  const router = useRouter();
+  const getToken = useApiToken();
+
+  const [doc, setDoc] = useState<DocumentGraph | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [otherText, setOtherText] = useState("");
+  const [comparisonSummary, setComparisonSummary] = useState("");
+  const [error, setError] = useState("");
+
+  async function apiRequest<T = any>(endpoint: string, options: RequestInit): Promise<T> {
+    const token = await getToken();
+    const headers = new Headers(options.headers);
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+
+    const res = await fetch(endpoint, { ...options, headers });
+    const contentType = res.headers.get("content-type") ?? "";
+    const data = contentType.includes("application/json") ? await res.json() : null;
+
+    if (!res.ok) {
+      throw new Error(data?.error ?? "The server could not process this request. Please try again.");
+    }
+    if (!data) {
+      throw new Error("Invalid response received from server.");
+    }
+    return data as T;
+  }
+
+  function openDocument(nextDoc: DocumentGraph) {
+    try {
+      const history = JSON.parse(localStorage.getItem("murdock.documents") ?? "[]");
+      const updated = [
+        { id: nextDoc.id, title: nextDoc.title, createdAt: new Date().toISOString() },
+        ...history.filter((item: { id: string }) => item.id !== nextDoc.id),
+      ].slice(0, 25);
+      localStorage.setItem("murdock.documents", JSON.stringify(updated));
+    } catch {
+      // LocalStorage fallback
+    }
+    router.push(`/documents/${nextDoc.id}`);
+  }
+
+  async function handleLoadSample() {
+    try {
+      setBusy(true);
+      setError("");
+      const sampleDoc = await apiRequest<DocumentGraph>(`${API_BASE}/documents/sample`, { method: "POST" });
+      openDocument(sampleDoc);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load sample agreement.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleFileUpload(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setBusy(true);
+      setError("");
+      const form = new FormData();
+      form.append("file", file);
+      const parsedDoc = await apiRequest<DocumentGraph>(`${API_BASE}/documents`, { method: "POST", body: form });
+      openDocument(parsedDoc);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not parse and analyze file.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleAskQuestion() {
+    if (!doc || !question.trim()) return;
+    try {
+      setError("");
+      const res = await apiRequest<{ answer: string }>(`${API_BASE}/documents/${doc.id}/ask`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: question.trim() }),
+      });
+      setAnswer(res.answer);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not answer question.");
+    }
+  }
+
+  async function handleCompare() {
+    if (!doc || !otherText.trim()) return;
+    try {
+      setError("");
+      const res = await apiRequest<{ summary: string }>(`${API_BASE}/compare`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leftDocumentId: doc.id, rightText: otherText.trim() }),
+      });
+      setComparisonSummary(res.summary);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not compare agreements.");
+    }
+  }
+
+  const flaggedClauses = useMemo(() => doc?.clauses.filter((c) => c.riskLevel !== "LOW") ?? [], [doc]);
+
+  // Landing / Upload View
+  if (!doc) {
+    return (
+      <main id="main-content" className="shell">
+        <a href="#upload-section" className="sr-only">Skip to document upload</a>
+
+        <nav className="nav" aria-label="Main navigation">
+          <div className="brand" aria-label="Murdock brand">
+            Mur<i>d</i>ock
+          </div>
+          <div className="nav-right">
+            <SignedIn>
+              <a className="btn ghost" href="/dashboard" aria-label="Go to personal document dashboard">
+                Dashboard
+              </a>
+            </SignedIn>
+            <span>Legal clarity, grounded in your document</span>
+            <AuthControls />
+          </div>
+        </nav>
+
+        <section className="hero" aria-labelledby="hero-heading">
+          <div className="eyebrow">AI-Assisted Legal Document Intelligence</div>
+          <h1 id="hero-heading">Understand what your contract actually says.</h1>
+          <p>
+            Upload any legal agreement to get instant, section-by-section plain English explanations,
+            grounded risk flags, version comparisons, and curated checklists to bring to a lawyer.
+          </p>
+          <div className="notice" role="note">
+            <strong>Legal Disclaimer:</strong> Murdock provides general legal literacy and information, not formal legal advice.
+            Consult a qualified attorney for advice regarding your specific situation.
+          </div>
+        </section>
+
+        <section id="upload-section" className="upload" aria-labelledby="upload-heading">
+          <h2 id="upload-heading" style={{ fontSize: 20, marginBottom: 8 }}>
+            {busy ? "Parsing & Analyzing Document…" : "Start with a Legal Document"}
+          </h2>
+          <p>
+            Upload a PDF, DOCX, or plain text contract. Murdock extracts a grounded clause graph
+            powering plain-language summaries, risk detection, and Q&A.
+          </p>
+
+          {busy && (
+            <div className="loader" role="status" aria-live="polite">
+              <span className="spinner" aria-hidden="true" />
+              <span>Analyzing clauses and detecting liabilities with GenAI...</span>
+            </div>
+          )}
+
+          {error && (
+            <p className="form-error" role="alert" aria-live="assertive">
+              {error}
+            </p>
+          )}
+
+          <div className="actions">
+            <label className="btn" aria-label="Choose a file to analyze">
+              <span>Choose Document (PDF, DOCX, TXT)</span>
+              <input
+                className="file"
+                type="file"
+                accept=".txt,.pdf,.docx"
+                onChange={handleFileUpload}
+                disabled={busy}
+                aria-label="Upload legal document"
+              />
+            </label>
+            <button
+              className="btn ghost"
+              onClick={handleLoadSample}
+              disabled={busy}
+              aria-label="Explore sample rental agreement"
+            >
+              {busy ? "Please wait…" : "Explore Sample Agreement"}
+            </button>
+          </div>
+        </section>
+
+        <section className="how" aria-label="How Murdock works">
+          <div>
+            <b>1. Grounded Clause Extraction</b>
+            <p>Documents are parsed into cited, immutable clauses—eliminating AI hallucination.</p>
+          </div>
+          <div>
+            <b>2. Plain-Language Simplification</b>
+            <p>Jargon is demystified into 8th-grade accessible English directly alongside original terms.</p>
+          </div>
+          <div>
+            <b>3. Actionable Next Steps</b>
+            <p>Generate targeted questions and topics to review with a licensed legal professional.</p>
+          </div>
+        </section>
+
+        <footer className="footer" aria-label="Footer">
+          <span>© 2026 Murdock · Legal Literacy, Not Legal Advice</span>
+          <div>
+            <a href="/privacy" aria-label="Privacy policy">Privacy</a>
+            <a href="/terms" aria-label="Terms of service">Terms</a>
+            <a href="/contact" aria-label="Contact us">Contact</a>
+          </div>
+        </footer>
+      </main>
+    );
+  }
+
+  // Active Document Workspace View
+  return (
+    <main id="main-content" className="shell">
+      <nav className="nav" aria-label="Document workspace navigation">
+        <div className="brand" aria-label="Murdock brand">
+          Mur<i>d</i>ock
+        </div>
+        <div className="nav-right">
+          <button
+            className="btn ghost"
+            onClick={() => setDoc(null)}
+            aria-label="Close document and analyze another"
+          >
+            New document
+          </button>
+          <AuthControls />
+        </div>
+      </nav>
+
+      {error && (
+        <p className="form-error" role="alert" aria-live="assertive">
+          {error}
+        </p>
+      )}
+
+      <div className="notice" role="note">
+        <strong>Information only:</strong> Every summary and risk flag below cites specific clauses from this agreement.
+      </div>
+
+      <div className="workspace" style={{ marginTop: 18 }}>
+        {/* Main Document Clause Graph */}
+        <section className="card" aria-label="Document clauses and plain-language analysis">
+          <div className="doc-head">
+            <div>
+              <h2>{doc.title}</h2>
+              <span className="eyebrow">Structured Clause Intelligence Graph</span>
+            </div>
+            <span>{doc.clauses.length} clauses analyzed</span>
+          </div>
+
+          <div className="clauses">
+            {doc.clauses.map((clause) => (
+              <article
+                id={clause.id}
+                key={clause.id}
+                className={`clause ${clause.riskLevel}`}
+                aria-label={`Clause ${clause.sectionLabel} with ${clause.riskLevel} risk`}
+              >
+                <div className="meta">
+                  {clause.sectionLabel} · {clause.clauseType}
+                </div>
+                <p>{clause.rawText}</p>
+                <p className="summary">
+                  <strong>In Plain English:</strong> {clause.plainLanguageSummary}
+                </p>
+                {clause.riskExplanation && (
+                  <p>
+                    <strong>Why this matters:</strong> {clause.riskExplanation}
+                  </p>
+                )}
+                <span className="citation">Source: {clause.sectionLabel}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        {/* Sidebar Intelligence & Tools */}
+        <aside className="side" aria-label="Risk assessment and document tools">
+          <section className="card" aria-labelledby="risk-summary-heading">
+            <h3 id="risk-summary-heading">Risk & Inconsistency Flags</h3>
+            <div className="score" aria-label={`${flaggedClauses.length} clauses needing attention`}>
+              {flaggedClauses.length}
+            </div>
+            <p style={{ fontSize: 13, color: "#68786e" }}>clauses requiring closer review</p>
+            {flaggedClauses.map((clause) => (
+              <div className="flag" key={clause.id}>
+                <b>{clause.riskLevel}</b> · <a href={`#${clause.id}`}>{clause.sectionLabel}</a>
+              </div>
+            ))}
+          </section>
+
+          <section className="card" aria-labelledby="chat-heading">
+            <h3 id="chat-heading">Ask Murdock</h3>
+            <div className="notice" role="note" style={{ fontSize: 12 }}>
+              Strictly grounded in your document. Refuses unauthorized legal advice.
+            </div>
+            <div className="chat">
+              <input
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                placeholder="What happens if I terminate early?"
+                aria-label="Question about this document"
+              />
+              <button className="btn" onClick={handleAskQuestion} aria-label="Submit question to assistant">
+                Ask
+              </button>
+            </div>
+            {answer && (
+              <p className="answer" role="region" aria-live="polite">
+                {answer}
+              </p>
+            )}
+          </section>
+
+          <section className="card" aria-labelledby="compare-heading">
+            <h3 id="compare-heading">Compare Another Version</h3>
+            <textarea
+              value={otherText}
+              onChange={(e) => setOtherText(e.target.value)}
+              placeholder="Paste counter-proposal or amended version text here…"
+              aria-label="Alternate agreement text to compare"
+              rows={4}
+            />
+            <button
+              className="btn"
+              style={{ marginTop: 8 }}
+              onClick={handleCompare}
+              aria-label="Analyze differences between versions"
+            >
+              Compare Clauses
+            </button>
+            {comparisonSummary && (
+              <div className="diff" role="region" aria-live="polite">
+                {comparisonSummary}
+              </div>
+            )}
+          </section>
+
+          <section className="card" aria-labelledby="lawyer-heading">
+            <h3 id="lawyer-heading">Questions to Ask a Lawyer</h3>
+            <p style={{ fontSize: 12, color: "#68786e", marginBottom: 8 }}>
+              Bring these targeted questions to your legal consultation:
+            </p>
+            {flaggedClauses.map((clause) => (
+              <p style={{ fontSize: 13 }} key={clause.id}>
+                • {clause.lawyerQuestion ?? `Could you clarify the legal implications of ${clause.sectionLabel}?`}{" "}
+                <span className="citation">[{clause.sectionLabel}]</span>
+              </p>
+            ))}
+          </section>
+        </aside>
+      </div>
+    </main>
+  );
 }
