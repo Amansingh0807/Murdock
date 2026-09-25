@@ -85,4 +85,21 @@ describe("Document Service Unit Tests", () => {
     const text = await fileText(validFile);
     expect(text).toContain("Payment is due monthly.");
   });
+
+  it("should extract a 50-section document in under 100 ms (performance regression)", () => {
+    const sections = Array.from({ length: 50 }, (_, i) =>
+      `${i + 1}. SECTION ${i + 1}\nThe tenant must comply with all terms set forth in section ${i + 1}.\n\n`
+    ).join("");
+    const start = performance.now();
+    const doc = extractGraph("perf_user", "Large Agreement", sections);
+    const elapsed = performance.now() - start;
+    expect(doc.clauses.length).toBeGreaterThan(0);
+    expect(elapsed).toBeLessThan(100);
+  });
+
+  it("should truncate oversized text at the 500 kB boundary", () => {
+    const huge = "a".repeat(600_000);
+    const cleaned = cleanText(huge);
+    expect(cleaned.length).toBe(500_000);
+  });
 });
